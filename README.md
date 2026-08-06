@@ -122,7 +122,7 @@ python3 GGFWPi_v0.6.6-beta.py --help
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR-ORGANIZATION/ggfwpi.git
+git clone https://github.com/patapik/ggfwpi.git
 cd ggfwpi
 ```
 
