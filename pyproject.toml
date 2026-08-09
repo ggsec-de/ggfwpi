@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ggfwpi"
+version = "0.7.0b0"
+description = "Read-only Raspberry Pi firmware and platform security auditor"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Maciej Gojny, GG Advanced IT Security UG" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+dependencies = []
+
+[project.optional-dependencies]
+crypto = ["cryptography"]
+password-audit = ["passlib"]
+full = ["cryptography", "passlib"]
+
+[project.scripts]
+ggfw = "ggfw:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ggfw*"]
