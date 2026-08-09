@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 VERSIONED_MODULE_RE = re.compile(
@@ -66,12 +67,20 @@ if MODULE_VERSION < MINIMUM_TESTED_VERSION:
         f"selected {MODULE_PATH.name}"
     )
 
-MODULE_NAME = "ggfw_" + "_".join(map(str, MODULE_VERSION))
+PACKAGE_ROOT = MODULE_PATH.parent
+if str(PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_ROOT))
+
+ggfw = importlib.import_module("ggfw")
+crypto_rsa = importlib.import_module("ggfw.crypto.rsa")
+host_policy = importlib.import_module("ggfw.engines.host_policy")
+
+MODULE_NAME = "ggfw_launcher_" + "_".join(map(str, MODULE_VERSION))
 spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"Could not create import spec for {MODULE_PATH}")
-ggfw = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(ggfw)
+launcher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launcher)
 print(f"[*] GGFW regression target: {MODULE_PATH.name}", file=sys.stderr)
 
 
@@ -79,8 +88,46 @@ class TestSuiteTargetSelection(unittest.TestCase):
     def test_current_module_is_selected_by_semantic_version(self):
         self.assertGreaterEqual(MODULE_VERSION, MINIMUM_TESTED_VERSION)
         self.assertEqual(ggfw.TOOL_VERSION, f"{MODULE_VERSION[0]}.{MODULE_VERSION[1]}.{MODULE_VERSION[2]}-beta")
+        self.assertEqual(launcher.TOOL_VERSION, ggfw.TOOL_VERSION)
         self.assertEqual(MODULE_PATH.name, f"GGFWPi_v{MODULE_VERSION[0]}.{MODULE_VERSION[1]}.{MODULE_VERSION[2]}-beta.py")
         self.assertNotEqual(MODULE_PATH.name, "GGFWPi_v0.5.6-beta.py")
+
+    def test_package_and_launcher_preserve_public_api(self):
+        expected = {
+            'EvidencePackageBuilder', 'Finding', 'GGFWReport', 'HardwarePolicyEngine',
+            'RaspberryPiEEPROMImage', 'SummaryInvariantError', 'TOOL_VERSION',
+            'TOOL_VERSION_DISPLAY', 'build_gate_accounting', 'build_secure_boot_evidence',
+            'build_secure_boot_policy_rollup', 'decode_otp_state', 'evaluate_fail_policy',
+            'load_rpiboot_metadata', 'main', 'parse_pem_rsa_public_key',
+            'parse_rpi_pubkey_bin', 'print_gate_accounting', 'print_otp_summary',
+            'print_remediation_summary', 'print_scan_summary',
+            'print_secure_boot_policy_rollup', 'run_audit', 'run_crypto_self_test',
+            'sha256_file', 'sort_findings_for_display', 'validate_rpi_signed_file',
+            'validate_secure_boot_chain', 'validate_summary_invariants',
+            'verify_bcm2712_customer_signed_blob',
+        }
+        for target in (ggfw, launcher):
+            self.assertTrue(expected.issubset(set(dir(target))))
+
+    def test_launcher_main_uses_launcher_run_audit(self):
+        original = launcher.run_audit
+        launcher.run_audit = lambda: 7
+        try:
+            self.assertEqual(launcher.main(), 7)
+        finally:
+            launcher.run_audit = original
+
+    def test_package_module_entrypoint_exposes_help(self):
+        completed = subprocess.run(
+            [sys.executable, '-m', 'ggfw', '--help'],
+            cwd=PACKAGE_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+        self.assertIn('--weak-password-file', completed.stdout)
+        self.assertIn('--secure-boot-public-key', completed.stdout)
 
 
 
@@ -140,6 +187,362 @@ def build_bcm2712_signed_bootsys(private_key: Path, key, directory: Path, versio
     signed_prefix = base + metadata
     signature = sign_bytes(private_key, signed_prefix, directory, 'bootsys')
     return signed_prefix + signature + key.to_pubkey_bin()
+
+
+def der_length(length: int) -> bytes:
+    if length < 0x80:
+        return bytes([length])
+    encoded = length.to_bytes((length.bit_length() + 7) // 8, 'big')
+    return bytes([0x80 | len(encoded)]) + encoded
+
+
+def der_tlv(tag: int, value: bytes) -> bytes:
+    return bytes([tag]) + der_length(len(value)) + value
+
+
+def der_positive_integer(value: int) -> bytes:
+    encoded = value.to_bytes((value.bit_length() + 7) // 8, 'big')
+    if encoded[0] & 0x80:
+        encoded = b'\x00' + encoded
+    return der_tlv(0x02, encoded)
+
+
+class CryptoHardeningTests(unittest.TestCase):
+    def setUp(self):
+        self.key = ggfw.RSAPublicKeyMaterial(
+            ggfw.CRYPTO_KAT_RSA_MODULUS,
+            ggfw.CRYPTO_KAT_RSA_EXPONENT,
+            'hardening-test',
+        )
+        self.digest = hashlib.sha256(ggfw.CRYPTO_KAT_BOOT_IMAGE).digest()
+        self.signature = ggfw.CRYPTO_KAT_BOOT_SIGNATURE
+
+    def test_builtin_verifier_uses_compare_digest(self):
+        with mock.patch.object(
+            crypto_rsa.hmac, 'compare_digest', wraps=crypto_rsa.hmac.compare_digest
+        ) as compare_digest:
+            result = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_builtin(
+                self.digest, self.signature, self.key
+            )
+        self.assertTrue(result.valid)
+        self.assertEqual(result.backend, 'builtin-python')
+        compare_digest.assert_called_once()
+
+    def test_signature_representative_must_be_less_than_modulus(self):
+        out_of_range = self.key.modulus.to_bytes(256, 'big')
+        with mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_cryptography'
+        ) as optional:
+            result = crypto_rsa.rsa_pkcs1_v15_sha256_verify_digest_result(
+                self.digest, out_of_range, self.key
+            )
+        self.assertFalse(result.valid)
+        optional.assert_not_called()
+
+    def test_builtin_is_selected_only_when_cryptography_is_unavailable(self):
+        with mock.patch.object(crypto_rsa, 'CRYPTOGRAPHY_AVAILABLE', False), mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_builtin',
+            wraps=crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_builtin,
+        ) as builtin, mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_cryptography'
+        ) as optional:
+            result = crypto_rsa.rsa_pkcs1_v15_sha256_verify_digest_result(
+                self.digest, self.signature, self.key
+            )
+        self.assertTrue(result.valid)
+        builtin.assert_called_once()
+        optional.assert_not_called()
+
+    def test_available_cryptography_backend_is_preferred(self):
+        expected = ggfw.RSAVerificationResult(True, 'cryptography/test')
+        with mock.patch.object(crypto_rsa, 'CRYPTOGRAPHY_AVAILABLE', True), mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_cryptography', return_value=expected
+        ) as optional, mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_builtin'
+        ) as builtin:
+            result = crypto_rsa.rsa_pkcs1_v15_sha256_verify_digest_result(
+                self.digest, self.signature, self.key
+            )
+        self.assertIs(result, expected)
+        optional.assert_called_once()
+        builtin.assert_not_called()
+
+    def test_invalid_signature_exception_maps_to_invalid_without_error(self):
+        class FakeInvalidSignature(Exception):
+            pass
+
+        with mock.patch.object(
+            crypto_rsa, '_CryptographyInvalidSignature', FakeInvalidSignature
+        ), mock.patch.object(
+            crypto_rsa, '_cryptography_verify_rsa_digest', side_effect=FakeInvalidSignature
+        ):
+            result = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_cryptography(
+                self.digest, self.signature, self.key
+            )
+        self.assertFalse(result.valid)
+        self.assertIsNone(result.error)
+        self.assertTrue(result.backend.startswith('cryptography/'))
+
+    def test_backend_error_fails_closed_without_builtin_retry(self):
+        with mock.patch.object(
+            crypto_rsa, '_cryptography_verify_rsa_digest',
+            side_effect=RuntimeError('backend unavailable'),
+        ):
+            failed = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_cryptography(
+                self.digest, self.signature, self.key
+            )
+        self.assertFalse(failed.valid)
+        self.assertIn('backend unavailable', failed.error)
+
+        with mock.patch.object(crypto_rsa, 'CRYPTOGRAPHY_AVAILABLE', True), mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_cryptography',
+            return_value=failed,
+        ), mock.patch.object(
+            crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_builtin'
+        ) as builtin:
+            result = crypto_rsa.rsa_pkcs1_v15_sha256_verify_digest_result(
+                self.digest, self.signature, self.key
+            )
+        self.assertFalse(result.valid)
+        self.assertIn('backend unavailable', result.error)
+        builtin.assert_not_called()
+
+    def test_backend_error_is_reported_and_invalidates_signed_file(self):
+        with tempfile.TemporaryDirectory(prefix='crypto-backend-error-') as tmp:
+            root = Path(tmp)
+            image = root / 'boot.img'
+            signature = root / 'boot.sig'
+            image.write_bytes(ggfw.CRYPTO_KAT_BOOT_IMAGE)
+            signature.write_text(
+                ggfw._crypto_kat_signature_text(
+                    ggfw.CRYPTO_KAT_BOOT_IMAGE,
+                    ggfw.CRYPTO_KAT_BOOT_SIGNATURE,
+                    '2712',
+                ),
+                encoding='ascii',
+            )
+            failed = ggfw.RSAVerificationResult(
+                False, 'cryptography/test', 'RuntimeError: backend unavailable'
+            )
+            with mock.patch.object(crypto_rsa, 'CRYPTOGRAPHY_AVAILABLE', True), mock.patch.object(
+                crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_cryptography',
+                return_value=failed,
+            ), mock.patch.object(
+                crypto_rsa, '_rsa_pkcs1_v15_sha256_verify_digest_builtin'
+            ) as builtin:
+                result = ggfw.validate_rpi_signed_file(
+                    image, signature, self.key, '2712'
+                )
+        self.assertEqual(result['overall'], ggfw.VALIDATION_INVALID)
+        self.assertEqual(result['rsa_signature_status'], 'INVALID')
+        self.assertEqual(result['verification_backend'], 'cryptography/test')
+        self.assertIn('backend unavailable', result['verification_backend_error'])
+        self.assertTrue(any('backend failure' in error for error in result['errors']))
+        builtin.assert_not_called()
+
+    @unittest.skipUnless(crypto_rsa.CRYPTOGRAPHY_AVAILABLE, 'cryptography is not installed')
+    def test_optional_and_builtin_backends_have_kat_parity(self):
+        builtin = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_builtin(
+            self.digest, self.signature, self.key
+        )
+        optional = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_cryptography(
+            self.digest, self.signature, self.key
+        )
+        self.assertEqual(optional.valid, builtin.valid)
+        tampered = bytearray(self.signature)
+        tampered[-1] ^= 1
+        builtin_bad = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_builtin(
+            self.digest, bytes(tampered), self.key
+        )
+        optional_bad = crypto_rsa._rsa_pkcs1_v15_sha256_verify_digest_cryptography(
+            self.digest, bytes(tampered), self.key
+        )
+        self.assertEqual(optional_bad.valid, builtin_bad.valid)
+
+    def _pkcs1_der(self) -> bytes:
+        body = (
+            der_positive_integer(self.key.modulus)
+            + der_positive_integer(self.key.exponent)
+        )
+        return der_tlv(0x30, body)
+
+    def test_der_rejects_indefinite_length(self):
+        with self.assertRaisesRegex(ggfw.SecureBootFormatError, 'indefinite-length'):
+            crypto_rsa._parse_rsa_public_key_der(b'\x30\x80\x00\x00')
+
+    def test_der_rejects_nonminimal_long_form_length(self):
+        with self.assertRaisesRegex(ggfw.SecureBootFormatError, 'long-form'):
+            crypto_rsa._der_read_length(b'\x81\x7f', 0)
+        with self.assertRaisesRegex(ggfw.SecureBootFormatError, 'Non-minimal'):
+            crypto_rsa._der_read_length(b'\x82\x00\x80', 0)
+
+    def test_der_rejects_nonminimal_and_negative_modulus(self):
+        modulus = self.key.modulus.to_bytes(256, 'big')
+        exponent = der_positive_integer(self.key.exponent)
+        nonminimal = der_tlv(0x30, der_tlv(0x02, b'\x00\x00' + modulus) + exponent)
+        negative = der_tlv(0x30, der_tlv(0x02, modulus) + exponent)
+        with self.assertRaisesRegex(ggfw.SecureBootFormatError, 'Non-minimal DER INTEGER'):
+            crypto_rsa._parse_rsa_public_key_der(nonminimal)
+        with self.assertRaisesRegex(ggfw.SecureBootFormatError, 'Negative DER INTEGER'):
+            crypto_rsa._parse_rsa_public_key_der(negative)
+
+    def test_spki_rejects_non_rsa_algorithm_identifier(self):
+        wrong_algorithm = der_tlv(
+            0x30, bytes.fromhex('06092a864886f70d0101020500')
+        )
+        spki = der_tlv(
+            0x30,
+            wrong_algorithm + der_tlv(0x03, b'\x00' + self._pkcs1_der()),
+        )
+        with self.assertRaisesRegex(ggfw.SecureBootFormatError, 'rsaEncryption'):
+            crypto_rsa._parse_rsa_public_key_der(spki)
+
+
+class HostHardeningTests(unittest.TestCase):
+    def test_weak_password_file_extends_builtins_and_deduplicates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir, 'weak.txt')
+            raw = b'custom-password\nraspberry\ncustom-password\n'
+            path.write_bytes(raw)
+            candidates, metadata = ggfw.load_weak_password_dictionary(str(path))
+
+        self.assertEqual(candidates[:len(ggfw.BUILTIN_WEAK_PASSWORDS)], ggfw.BUILTIN_WEAK_PASSWORDS)
+        self.assertEqual(candidates.count('custom-password'), 1)
+        self.assertEqual(metadata['external_candidate_count'], 3)
+        self.assertEqual(metadata['external_added_count'], 1)
+        self.assertEqual(metadata['external_file_sha256'], hashlib.sha256(raw).hexdigest())
+
+    def test_weak_password_file_preserves_spaces_and_hash_prefix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir, 'weak.txt')
+            path.write_text('  spaced password  \n#literal-password\n', encoding='utf-8')
+            candidates, _ = ggfw.load_weak_password_dictionary(str(path))
+
+        self.assertIn('  spaced password  ', candidates)
+        self.assertIn('#literal-password', candidates)
+
+    def test_weak_password_loader_rejects_invalid_inputs_without_secret_leak(self):
+        cases = {
+            'invalid_utf8': b'\xff\xfe',
+            'nul_input': b'never-print-this-secret\x00suffix\n',
+            'long_line': b'x' * (ggfw.MAX_WEAK_PASSWORD_BYTES + 1),
+            'large_file': b'x\n' * ((ggfw.MAX_WEAK_PASSWORD_FILE_BYTES // 2) + 1),
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for name, raw in cases.items():
+                with self.subTest(name=name):
+                    path = Path(temp_dir, name)
+                    path.write_bytes(raw)
+                    with self.assertRaises(ggfw.GGFWRuntimeError) as raised:
+                        ggfw.load_weak_password_dictionary(str(path))
+                    self.assertNotIn('never-print-this-secret', str(raised.exception))
+
+    def test_external_password_match_is_reported_without_candidate_value(self):
+        account = mock.Mock(
+            pw_name='alice', pw_uid=1000, pw_gid=1000, pw_shell='/bin/bash'
+        )
+        fake_pwd = mock.Mock()
+        fake_pwd.getpwall.return_value = [account]
+        fake_pwd.getpwnam.side_effect = KeyError('pi')
+        fake_grp = mock.Mock()
+        fake_grp.getgrnam.side_effect = KeyError('missing')
+        metadata = {
+            'kind': 'BUILTIN_PLUS_EXTERNAL', 'builtin_count': 10,
+            'external_candidate_count': 1, 'external_added_count': 1,
+            'total_count': 11, 'external_file_sha256': 'a' * 64,
+        }
+        report = ggfw.GGFWReport()
+        engine = ggfw.FATPolicyEngine(
+            {}, {}, report,
+            weak_passwords=('never-print-this-secret',),
+            weak_password_metadata=metadata,
+        )
+        shadow = 'alice:$6$fixture:0:0:99999:7:::\n'
+        with mock.patch.object(host_policy, 'pwd', fake_pwd), mock.patch.object(
+            host_policy, 'grp', fake_grp
+        ), mock.patch('builtins.open', mock.mock_open(read_data=shadow)), mock.patch.object(
+            host_policy, 'read_os_release', return_value={'ID': 'fixture'}
+        ), mock.patch.object(
+            host_policy, 'assess_ssh_password_exposure', return_value={
+                'confirmed_remote_password_exposure': False
+            }
+        ), mock.patch.object(
+            host_policy, 'verify_password_against_hash',
+            side_effect=lambda candidate, _: candidate == 'never-print-this-secret'
+        ):
+            engine.check_default_credentials()
+
+        rendered = report.to_json()
+        self.assertIn('alice', rendered)
+        self.assertNotIn('never-print-this-secret', rendered)
+        self.assertEqual(
+            report.raw_artifacts['local_accounts']['weak_password_dictionary'], metadata
+        )
+
+    def test_ncat_exec_uses_argv_and_shell_name_boundaries(self):
+        self.assertIsNotNone(ggfw.detect_dual_use_shell_exec(
+            'ncat', ['ncat', '-e', '/bin/sh', 'example.test', '4444']
+        ))
+        self.assertIsNotNone(ggfw.detect_dual_use_shell_exec(
+            'ncat', ['ncat', '--exec=/bin/bash']
+        ))
+        self.assertIsNone(ggfw.detect_dual_use_shell_exec(
+            'ncat', ['ncat', 'note=-e /bin/sh']
+        ))
+        self.assertIsNone(ggfw.detect_dual_use_shell_exec(
+            'ncat', ['ncat', '-e', '/tmp/backup.sh']
+        ))
+        self.assertIsNone(ggfw.detect_dual_use_shell_exec(
+            'ncat', ['ncat', '-e', '/usr/bin/bashful']
+        ))
+
+    def test_socat_structured_addresses(self):
+        self.assertIsNotNone(ggfw.detect_dual_use_shell_exec(
+            'socat', ['socat', 'TCP-LISTEN:4444', 'EXEC:/bin/bash,pty']
+        ))
+        self.assertIsNotNone(ggfw.detect_dual_use_shell_exec(
+            'socat', ['socat', 'SYSTEM:echo ok']
+        ))
+        self.assertIsNone(ggfw.detect_dual_use_shell_exec(
+            'socat', ['socat', 'EXEC:/opt/health-check.sh']
+        ))
+        self.assertIsNone(ggfw.detect_dual_use_shell_exec(
+            'socat', ['socat', 'note=EXEC:/bin/sh']
+        ))
+
+    def test_wildcard_listener_pid_correlation(self):
+        inventory = [
+            {'wildcard': True, 'process': 'users:(("ncat",pid=4242,fd=3))'},
+            {'wildcard': False, 'process': 'users:(("ncat",pid=4343,fd=3))'},
+            {'wildcard': True, 'process': 'process unknown'},
+        ]
+        self.assertEqual(ggfw._wildcard_listener_pids(inventory), {4242})
+
+    def test_shell_exec_finding_is_medium_without_listener_and_high_with_listener(self):
+        for correlated, expected in ((False, ('MEDIUM', 'MEDIUM')), (True, ('HIGH', 'HIGH'))):
+            with self.subTest(correlated=correlated):
+                report = ggfw.GGFWReport()
+                if correlated:
+                    report.raw_artifacts['network_listeners'] = [{
+                        'wildcard': True,
+                        'process': 'users:(("ncat",pid=4242,fd=3))',
+                    }]
+                engine = ggfw.FATPolicyEngine({}, {}, report)
+                with mock.patch.object(host_policy.glob, 'glob', return_value=['/proc/4242']), mock.patch.object(
+                    host_policy.os, 'getpid', return_value=1
+                ), mock.patch.object(host_policy.os, 'getppid', return_value=2), mock.patch.object(
+                    host_policy.os, 'readlink', return_value='/usr/bin/ncat'
+                ), mock.patch.object(
+                    host_policy.Path, 'read_text', return_value='ncat'
+                ), mock.patch.object(
+                    host_policy.Path, 'read_bytes', return_value=b'ncat\x00-e\x00/bin/bash\x00'
+                ):
+                    engine.check_suspicious_processes()
+
+                finding = next(item for item in report.findings if item.rule_id == 'RPI-PROC-003')
+                self.assertEqual((finding.severity, finding.confidence), expected)
+                self.assertEqual(finding.finding_class, 'HEURISTIC_INDICATOR')
+                self.assertEqual(len({item.rule_id for item in report.findings}), len(report.findings))
 
 
 class SecureBootFixtures(unittest.TestCase):
@@ -235,6 +638,9 @@ class SecureBootFixtures(unittest.TestCase):
         self.assertEqual(result['digest_status'], 'MATCH')
         self.assertEqual(result['rsa_signature_status'], 'VERIFIED')
         self.assertEqual(result['target_soc_status'], 'MATCH')
+        self.assertIn(result['verification_backend'].split('/', 1)[0], {
+            'builtin-python', 'cryptography',
+        })
 
     def test_boot_sig_tamper_fails(self):
         directory = Path(tempfile.mkdtemp(prefix='tamper-', dir=self.root))
@@ -532,13 +938,16 @@ class SecureBootFixtures(unittest.TestCase):
         self.assertEqual(result['target_soc_status'], 'MISMATCH')
 
     def test_blocker_rules_include_crypto_failures(self):
-        source = MODULE_PATH.read_text(encoding='utf-8')
+        source = '\n'.join(
+            path.read_text(encoding='utf-8')
+            for path in sorted((MODULE_PATH.parent / 'ggfw').rglob('*.py'))
+        )
         for rule in ('RPI-SB-003', 'RPI-SB-004', 'RPI-SB-005', 'RPI-SB-006'):
             self.assertIn(f'"{rule}"', source)
 
     def test_help_exposes_secure_boot_options(self):
         completed = subprocess.run(
-            ['python3', str(MODULE_PATH), '--help'],
+            [sys.executable, str(MODULE_PATH), '--help'],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True,
         )
         self.assertIn('--secure-boot-public-key', completed.stdout)
@@ -609,7 +1018,7 @@ class SecureBootFixtures(unittest.TestCase):
     def test_invalid_explicit_metadata_path_fails_before_scan(self):
         missing = self.root / 'does-not-exist.json'
         completed = subprocess.run(
-            ['python3', str(MODULE_PATH), '--otp-metadata', str(missing), '--otp-only'],
+            [sys.executable, str(MODULE_PATH), '--otp-metadata', str(missing), '--otp-only'],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         self.assertEqual(completed.returncode, 1, completed.stdout)
@@ -621,7 +1030,7 @@ class SecureBootFixtures(unittest.TestCase):
         invalid_key = self.root / 'invalid-public.pem'
         invalid_key.write_text('not a PEM key', encoding='ascii')
         completed = subprocess.run(
-            ['python3', str(MODULE_PATH), '--secure-boot-public-key', str(invalid_key), '--otp-only'],
+            [sys.executable, str(MODULE_PATH), '--secure-boot-public-key', str(invalid_key), '--otp-only'],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         self.assertEqual(completed.returncode, 1, completed.stdout)

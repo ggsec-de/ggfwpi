@@ -1,0 +1,37 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+.vscode/
+.idea/
+
+# GGFW runtime output
+ggfw-evidence/
+*.ggcap
+report.json
+
+# Sensitive or device-specific evidence
+*.bin
+*.rom
+*.fd
+*.img
+*.sig
+*.pem
+*otp*.json
+*rpiboot*.json
+boot-baseline.json
+
+# Test caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Python packaging and local environments
+build/
+dist/
+*.egg-info/
+.venv/

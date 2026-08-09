@@ -2,7 +2,7 @@
 
 **Read-only Raspberry Pi firmware and platform security auditor with SPI EEPROM acquisition, Secure Boot chain validation, OTP evidence, boot integrity baselines, policy gates, and portable `.ggcap` evidence packages.**
 
-Current release: **0.6.6-beta**
+Current release: **0.7.0-beta**
 
 Developed by **GG Advanced IT Security UG** — [ggsec.de](https://ggsec.de)
 
@@ -93,7 +93,10 @@ The code contains platform-aware logic for other Raspberry Pi SoCs, with the mos
 
 ## Requirements
 
-GGFWPi uses only the Python standard library for its core operation. Password verification can use one of the following backends:
+GGFWPi uses only the Python standard library for its core operation. RSA verification
+prefers the optional `cryptography` backend when installed and otherwise uses the
+embedded fail-closed verifier. Password verification can use one of the following
+backends:
 
 - `passlib` — preferred;
 - Python `crypt`, where available;
@@ -114,7 +117,9 @@ Root privileges are required for complete host inspection, `/etc/shadow` access,
 Check the available CLI and dependencies:
 
 ```bash
-python3 GGFWPi_v0.6.6-beta.py --help
+python3 -m ggfw --help
+# Compatibility entrypoint retained for existing automation:
+python3 GGFWPi_v0.7.0-beta.py --help
 ```
 
 ## Installation
@@ -126,11 +131,14 @@ git clone https://github.com/patapik/ggfwpi.git
 cd ggfwpi
 ```
 
-Make the scanner executable:
+Install the package with both optional security backends:
 
 ```bash
-chmod +x GGFWPi_v0.6.6-beta.py
+python3 -m pip install '.[full]'
 ```
+
+For a dependency-free checkout, `python3 -m ggfw` and the compatibility launcher
+continue to work with the standard-library fallback implementations.
 
 Optional password-verification backend on Debian-based systems:
 
@@ -156,7 +164,9 @@ command -v flashrom
 This mode does not inspect the host or access SPI:
 
 ```bash
-python3 GGFWPi_v0.6.6-beta.py --crypto-self-test
+python3 GGFWPi_v0.7.0-beta.py --crypto-self-test
+# Equivalent package entrypoint:
+python3 -m ggfw --crypto-self-test
 ```
 
 Expected result:
@@ -169,7 +179,7 @@ Expected result:
 ### 2. Run a standard audit
 
 ```bash
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --policy-profile default \
   --show-passed
 ```
@@ -179,7 +189,7 @@ sudo python3 GGFWPi_v0.6.6-beta.py \
 ```bash
 sudo mkdir -p /var/lib/ggfw
 
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --create-baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile default
 ```
@@ -189,7 +199,7 @@ Review and protect the baseline after creation. A baseline is a device-specific 
 ### 4. Compare against the baseline
 
 ```bash
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile hardened \
   --show-passed \
@@ -199,7 +209,7 @@ sudo python3 GGFWPi_v0.6.6-beta.py \
 ### 5. Audit a Secure Boot policy
 
 ```bash
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile secure-boot-required \
   --show-otp \
@@ -210,7 +220,7 @@ sudo python3 GGFWPi_v0.6.6-beta.py \
 For provisioned systems, provide external provisioning evidence and the expected customer public key:
 
 ```bash
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile secure-boot-required \
   --otp-metadata /path/to/rpiboot-json-or-directory \
@@ -237,7 +247,7 @@ Explicit external input paths are validated before acquisition begins. Missing, 
 Example CI gate:
 
 ```bash
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --policy-profile hardened \
   --fail-on HIGH
 ```
@@ -315,11 +325,21 @@ Skip SPI acquisition when it is not available or not required:
 Run only OTP and Secure Boot evidence collection:
 
 ```bash
-sudo python3 GGFWPi_v0.6.6-beta.py \
+sudo python3 GGFWPi_v0.7.0-beta.py \
   --otp-only \
   --show-otp \
   --secure-boot-evidence
 ```
+
+Extend the built-in weak/default password audit with a local UTF-8 wordlist:
+
+```bash
+sudo python3 -m ggfw --weak-password-file /secure/path/weak-passwords.txt
+```
+
+The file is bounded and read before the scan starts. Its contents and matched
+passwords are never written to reports; only candidate counts and the file's
+SHA-256 digest are recorded.
 
 ## Read-only SPI design
 
@@ -355,11 +375,16 @@ python3 test_GGFWPi_latest.py
 The first line identifies the selected module:
 
 ```text
-[*] GGFW regression target: GGFWPi_v0.6.6-beta.py
+[*] GGFW regression target: GGFWPi_v0.7.0-beta.py
 ```
 
 The suite covers:
 
+- package and compatibility-launcher entrypoints;
+- optional and built-in RSA backend behavior;
+- strict DER rejection and fail-closed backend errors;
+- bounded external weak-password dictionaries without credential disclosure;
+- structured dual-use process heuristics;
 - OTP decoders;
 - Secure Boot positive and negative cryptographic fixtures;
 - full BCM2711 and BCM2712 customer-chain scenarios;
@@ -372,7 +397,7 @@ The suite covers:
 Run the release-pinned suite:
 
 ```bash
-python3 test_GGFWPi_v0.6.6.py
+python3 test_GGFWPi_v0.7.0.py
 ```
 
 ## Important limitations
@@ -387,9 +412,20 @@ python3 test_GGFWPi_v0.6.6.py
 
 ```text
 .
-├── GGFWPi_v0.6.6-beta.py
+├── GGFWPi_v0.7.0-beta.py       # compatibility launcher
+├── pyproject.toml
+├── ggfw/
+│   ├── models/                 # findings, evidence, reports
+│   ├── parsers/                # config, cmdline, EEPROM image
+│   ├── boot/                   # resolution and integrity
+│   ├── hardware/               # platform, interrogation, OTP
+│   ├── crypto/                 # RSA, signatures, validation, KAT
+│   ├── engines/                # host and hardware policies
+│   ├── spi/                    # read-only EEPROM acquisition
+│   ├── reporting/              # console and policy gates
+│   └── packaging/              # .ggcap evidence package
 ├── test_GGFWPi_latest.py
-├── test_GGFWPi_v0.6.6.py
+├── test_GGFWPi_v0.7.0.py
 ├── README.md
 ├── LICENSE
 ├── NOTICE

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+## 0.7.0-beta — 2026-08-08
+
+- Split the 7,600-line implementation into the importable `ggfw` package while
+  retaining the versioned compatibility launcher and CLI exit contract.
+- Added optional `cryptography` RSA verification with a fail-closed standard-library fallback.
+- Hardened DER parsing and PKCS#1 v1.5 comparison behavior.
+- Added bounded external weak-password dictionaries without reporting candidate values.
+- Replaced flattened `nc`/`socat` shell-execution matching with structured argv parsing
+  and a review-required heuristic finding.
+- Added package entrypoints, installation metadata, and expanded regression coverage.
+- Validated the package entrypoint, cryptographic self-test, read-only SPI EEPROM
+  acquisition, live-config comparison, GGCap creation, and report accounting on
+  a physical Raspberry Pi 5 (BCM2712).
+
 ## 0.6.6-beta
 
 - Licensed the public project under Apache License 2.0.
