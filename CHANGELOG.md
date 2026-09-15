@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.7.1-beta — prepared 2026-09-14
+
+- Corrected permission advice so world-writable files lose only world-write
+  access; shadow modes are checked against a restrictive upper bound and trusted
+  ownership. Multiple affected files retain unique report rule IDs.
+- Replaced firewall substring/line-count heuristics with explicit UFW status and
+  structured nftables/iptables/ip6tables configuration checks. Failed inspection
+  is a coverage gap, not proof that a firewall is absent. Configuration detection
+  is not a proof of effective packet filtering.
+- Added random scan-ID suffixes and exclusive evidence-directory creation to
+  prevent artifacts from separate scans being mixed.
+- Added offline host-policy and concurrent evidence-allocation regressions.
+- Added CI for standard-library and optional backends, release checksums, and
+  installed-wheel entrypoints; documented virtual-environment installation.
+
 ## 0.7.0-beta — 2026-08-08
 
 - Split the 7,600-line implementation into the importable `ggfw` package while

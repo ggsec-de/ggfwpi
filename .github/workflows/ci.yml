@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'release/**', 'fix/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.12', '3.14']
+        backend: [stdlib, full]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify release checksums
+        run: sha256sum -c SHA256SUMS
+      - name: Isolate dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+      - name: Install optional backends
+        if: matrix.backend == 'full'
+        run: .venv/bin/python -m pip install '.[full]'
+      - name: Assert backend coverage
+        env:
+          GGFW_CI_BACKEND: ${{ matrix.backend }}
+        run: |
+          .venv/bin/python -c "import os; from ggfw._compat import CRYPTOGRAPHY_AVAILABLE, PASSLIB_AVAILABLE; full = os.environ['GGFW_CI_BACKEND'] == 'full'; assert CRYPTOGRAPHY_AVAILABLE == full; assert PASSLIB_AVAILABLE == full"
+      - name: Regression suites and known-answer test
+        run: |
+          .venv/bin/python test_GGFWPi_v0.7.1.py
+          .venv/bin/python -m unittest test_host_evidence -v
+          .venv/bin/python -m ggfw --crypto-self-test
+      - name: Build and install wheel
+        run: |
+          .venv/bin/python -m pip wheel --no-deps --wheel-dir dist .
+          .venv/bin/python -m pip install --force-reinstall --no-deps dist/*.whl
+      - name: Installed wheel smoke outside checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" -I -c "import ggfw; from pathlib import Path; import os; assert not Path(ggfw.__file__).resolve().is_relative_to(Path(os.environ['GITHUB_WORKSPACE']) / 'ggfw'); assert ggfw.TOOL_VERSION == '0.7.1-beta'"
+          "$GITHUB_WORKSPACE/.venv/bin/python" -I -m ggfw --crypto-self-test
+          "$GITHUB_WORKSPACE/.venv/bin/ggfw" --help

@@ -7,6 +7,7 @@ from ggfw.cache import CacheManager
 from ggfw.models.evidence import EvidenceRecord
 from ggfw.models.findings import Finding
 from ggfw.models.report import GGFWReport
+from ggfw.engines.firewall import inspect_firewalls
 from ggfw.system.passwords import BUILTIN_WEAK_PASSWORDS, load_weak_password_dictionary, verify_password_against_hash
 
 def read_os_release() -> Dict[str, str]:
@@ -842,6 +843,13 @@ class FATPolicyEngine:
             '/etc/passwd', '/etc/shadow', '/etc/sudoers',
             '/etc/ssh/sshd_config', '/boot/firmware/config.txt'
         ]
+        world_writable = []
+        shadow_groups = {0}
+        if grp is not None:
+            try:
+                shadow_groups.add(grp.getgrnam('shadow').gr_gid)
+            except (KeyError, OSError):
+                pass
 
         for filepath in critical_files:
             if os.path.exists(filepath):
@@ -850,19 +858,22 @@ class FATPolicyEngine:
                     mode = stat.st_mode & 0o777
 
                     if mode & 0o002:
-                        self.report.add_finding(Finding(
-                            rule_id="RPI-PERM-001", severity="HIGH", category="ACCESS",
-                            description=f"Critical file is world-writable: {filepath}",
-                            evidence=f"Permissions: {oct(mode)}",
-                            remediation=f"Run: chmod 644 {filepath}"
-                        ))
+                        world_writable.append((filepath, mode))
 
-                    if 'shadow' in filepath and mode != 0o640:
+                    # 0640 is an upper bound, not a command to add permissions.
+                    # Group read is acceptable only for root/the shadow group.
+                    if filepath == '/etc/shadow' and (
+                        mode & ~0o640 or stat.st_uid != 0
+                        or (mode & 0o040 and stat.st_gid not in shadow_groups)
+                    ):
                         self.report.add_finding(Finding(
                             rule_id="RPI-PERM-002", severity="CRITICAL", category="ACCESS",
                             description=f"Shadow file has incorrect permissions.",
-                            evidence=f"Permissions: {oct(mode)} (expected 640)",
-                            remediation=f"Run: chmod 640 {filepath}"
+                            evidence=f"Permissions: {oct(mode)}; uid={stat.st_uid}; gid={stat.st_gid}",
+                            remediation=(
+                                "Review ownership and ACLs. To remove excess access without adding permissions: "
+                                "chown root /etc/shadow && chmod u-x,go-rwx /etc/shadow"
+                            )
                         ))
 
                     if 'sudoers' in filepath and mode != 0o440:
@@ -875,6 +886,16 @@ class FATPolicyEngine:
 
                 except Exception as e:
                     logger.error(f"Error checking permissions for {filepath}: {e}")
+
+        if world_writable:
+            # One rule ID per report, even when several files need repair.
+            self.report.add_finding(Finding(
+                rule_id='RPI-PERM-001', severity='HIGH', category='ACCESS',
+                description='Critical files are world-writable.',
+                evidence='; '.join(f'{path}: {oct(mode)}' for path, mode in world_writable),
+                remediation='Remove world-write access: ' + '; '.join(
+                    f'chmod o-w {path}' for path, _ in world_writable),
+            ))
 
     def check_suspicious_processes(self):
         """Inspect /proc using exact executable names and high-confidence argument patterns."""
@@ -1016,32 +1037,19 @@ class FATPolicyEngine:
             ))
 
     def check_firewall(self):
-        firewalls = [
-            {'name': 'ufw', 'cmd': ['ufw', 'status'], 'check': 'active'},
-            {'name': 'nftables', 'cmd': ['nft', 'list', 'ruleset'], 'check': 'table'},
-            {'name': 'iptables', 'cmd': ['iptables', '-L'], 'check': 'Chain'}
-        ]
-
-        active_firewalls = []
-
-        for fw in firewalls:
-            try:
-                result = subprocess.run(fw['cmd'], capture_output=True, text=True)
-                if fw['name'] == 'ufw' and 'active' in result.stdout.lower():
-                    active_firewalls.append(fw['name'])
-                elif fw['name'] == 'nftables' and 'table' in result.stdout:
-                    active_firewalls.append(fw['name'])
-                elif fw['name'] == 'iptables' and 'Chain' in result.stdout and len(result.stdout.splitlines()) > 3:
-                    active_firewalls.append(fw['name'])
-            except (OSError, subprocess.SubprocessError):
-                continue
-
-        if not active_firewalls:
+        observations = inspect_firewalls()
+        self.report.raw_artifacts['firewall_assessment'] = observations
+        if not any(item['state'] == 'CONFIGURED' for item in observations):
+            incomplete = any(item['state'] == 'UNKNOWN' for item in observations)
             self.report.add_finding(Finding(
-                rule_id="RPI-FW-001", severity="HIGH", category="NETWORK",
-                description="No active firewall detected.",
-                evidence="ufw, nftables, iptables not active",
-                remediation="Install and configure a firewall. Recommended: sudo apt install ufw && sudo ufw enable"
+                rule_id='RPI-FW-001', severity='MEDIUM' if incomplete else 'HIGH', category='NETWORK',
+                description=('Firewall configuration could not be fully inspected.' if incomplete
+                             else 'No supported firewall filtering configuration detected.'),
+                evidence='; '.join(f"{item['tool']}: {item['state']} ({item['detail']})" for item in observations),
+                remediation='Review the firewall rules with administrative access; preserve remote management access before enabling filtering.',
+                coverage_gap=incomplete,
+                finding_class='COVERAGE_GAP' if incomplete else 'SECURITY_FINDING',
+                status='EVIDENCE_INCOMPLETE' if incomplete else 'DETECTED',
             ))
 
 

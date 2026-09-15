@@ -1,9 +1,9 @@
 """Extracted GGFW component: constants."""
 
 
-TOOL_VERSION = "0.7.0-beta"
+TOOL_VERSION = "0.7.1-beta"
 
-TOOL_VERSION_DISPLAY = "0.7.0 beta"
+TOOL_VERSION_DISPLAY = "0.7.1 beta"
 
 REPORT_SCHEMA = "ggfw-report/v2.11"
 

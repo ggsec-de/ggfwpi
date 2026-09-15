@@ -2,7 +2,7 @@
 
 **Read-only Raspberry Pi firmware and platform security auditor with SPI EEPROM acquisition, Secure Boot chain validation, OTP evidence, boot integrity baselines, policy gates, and portable `.ggcap` evidence packages.**
 
-Current release: **0.7.0-beta**
+Current release: **0.7.1-beta**
 
 Developed by **GG Advanced IT Security UG** — [ggsec.de](https://ggsec.de)
 
@@ -117,9 +117,9 @@ Root privileges are required for complete host inspection, `/etc/shadow` access,
 Check the available CLI and dependencies:
 
 ```bash
-python3 -m ggfw --help
+.venv/bin/python -m ggfw --help
 # Compatibility entrypoint retained for existing automation:
-python3 GGFWPi_v0.7.0-beta.py --help
+.venv/bin/python GGFWPi_v0.7.1-beta.py --help
 ```
 
 ## Installation
@@ -127,24 +127,30 @@ python3 GGFWPi_v0.7.0-beta.py --help
 Clone the repository:
 
 ```bash
-git clone https://github.com/patapik/ggfwpi.git
+git clone https://github.com/ggsec-de/ggfwpi.git
 cd ggfwpi
 ```
 
-Install the package with both optional security backends:
+Create an isolated environment (recommended on Raspberry Pi OS and Kali), then
+install the package with both optional security backends:
 
 ```bash
-python3 -m pip install '.[full]'
+sudo apt install python3-venv
+python3 -m venv .venv
+.venv/bin/python -m pip install '.[full]'
 ```
 
 For a dependency-free checkout, `python3 -m ggfw` and the compatibility launcher
 continue to work with the standard-library fallback implementations.
 
-Optional password-verification backend on Debian-based systems:
+Use the same interpreter under sudo; activating a venv alone does not ensure
+that sudo uses it. Do not use `sudo pip` or `--break-system-packages`.
+See [Kali's Python environment guidance](https://www.kali.org/docs/general-use/python3-external-packages/).
+
+For a venv with only the optional password-verification backend:
 
 ```bash
-sudo apt update
-sudo apt install python3-passlib
+.venv/bin/python -m pip install '.[password-audit]'
 ```
 
 Install the Raspberry Pi EEPROM tools and `flashrom` through the packages appropriate for the target distribution. Verify their locations with:
@@ -164,9 +170,9 @@ command -v flashrom
 This mode does not inspect the host or access SPI:
 
 ```bash
-python3 GGFWPi_v0.7.0-beta.py --crypto-self-test
+.venv/bin/python GGFWPi_v0.7.1-beta.py --crypto-self-test
 # Equivalent package entrypoint:
-python3 -m ggfw --crypto-self-test
+.venv/bin/python -m ggfw --crypto-self-test
 ```
 
 Expected result:
@@ -179,7 +185,7 @@ Expected result:
 ### 2. Run a standard audit
 
 ```bash
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --policy-profile default \
   --show-passed
 ```
@@ -189,7 +195,7 @@ sudo python3 GGFWPi_v0.7.0-beta.py \
 ```bash
 sudo mkdir -p /var/lib/ggfw
 
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --create-baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile default
 ```
@@ -199,7 +205,7 @@ Review and protect the baseline after creation. A baseline is a device-specific 
 ### 4. Compare against the baseline
 
 ```bash
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile hardened \
   --show-passed \
@@ -209,7 +215,7 @@ sudo python3 GGFWPi_v0.7.0-beta.py \
 ### 5. Audit a Secure Boot policy
 
 ```bash
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile secure-boot-required \
   --show-otp \
@@ -220,7 +226,7 @@ sudo python3 GGFWPi_v0.7.0-beta.py \
 For provisioned systems, provide external provisioning evidence and the expected customer public key:
 
 ```bash
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --baseline /var/lib/ggfw/boot-baseline.json \
   --policy-profile secure-boot-required \
   --otp-metadata /path/to/rpiboot-json-or-directory \
@@ -247,7 +253,7 @@ Explicit external input paths are validated before acquisition begins. Missing, 
 Example CI gate:
 
 ```bash
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --policy-profile hardened \
   --fail-on HIGH
 ```
@@ -296,13 +302,24 @@ By default, GGFWPi creates:
 
 ```text
 ggfw-evidence/
-├── ggfw-<timestamp>-<soc>/
+├── ggfw-<timestamp>-<soc>-<uuid>/
 │   ├── report.json
 │   └── evidence/
-└── ggfw-<timestamp>-<soc>.ggcap
+└── ggfw-<timestamp>-<soc>-<uuid>.ggcap
 ```
 
 The `.ggcap` file is a ZIP-based evidence container containing the report, manifest, collected artifacts, hashes, Secure Boot evidence, and supporting metadata.
+
+The random UUID suffix keeps scans started in the same second separate. Existing
+scan directories are never reused. An explicit output filename still replaces
+that package: use different `--output` paths for concurrent scans.
+
+Firewall evidence (`raw_artifacts.firewall_assessment`) distinguishes configured
+filtering, no supported configuration, unavailable tools and failed inspection.
+An active UFW status or a reachable DROP/REJECT rule/policy is configuration
+evidence, not proof that every interface, address family or service is protected.
+Unsupported output and inspection failures are coverage gaps when no supported
+configuration can be confirmed. Review rule order and actual packet reachability.
 
 Specify a package path:
 
@@ -325,7 +342,7 @@ Skip SPI acquisition when it is not available or not required:
 Run only OTP and Secure Boot evidence collection:
 
 ```bash
-sudo python3 GGFWPi_v0.7.0-beta.py \
+sudo .venv/bin/python -m ggfw \
   --otp-only \
   --show-otp \
   --secure-boot-evidence
@@ -334,7 +351,7 @@ sudo python3 GGFWPi_v0.7.0-beta.py \
 Extend the built-in weak/default password audit with a local UTF-8 wordlist:
 
 ```bash
-sudo python3 -m ggfw --weak-password-file /secure/path/weak-passwords.txt
+sudo .venv/bin/python -m ggfw --weak-password-file /secure/path/weak-passwords.txt
 ```
 
 The file is bounded and read before the scan starts. Its contents and matched
@@ -369,13 +386,13 @@ GGFWPi reports evidence limitations separately from confirmed security failures.
 Use the version-aware test runner:
 
 ```bash
-python3 test_GGFWPi_latest.py
+.venv/bin/python test_GGFWPi_latest.py
 ```
 
 The first line identifies the selected module:
 
 ```text
-[*] GGFW regression target: GGFWPi_v0.7.0-beta.py
+[*] GGFW regression target: GGFWPi_v0.7.1-beta.py
 ```
 
 The suite covers:
@@ -397,8 +414,21 @@ The suite covers:
 Run the release-pinned suite:
 
 ```bash
-python3 test_GGFWPi_v0.7.0.py
+.venv/bin/python test_GGFWPi_v0.7.1.py
 ```
+
+Run the host-policy and evidence-isolation regressions too:
+
+```bash
+.venv/bin/python -m unittest test_host_evidence -v
+```
+
+The CI workflow runs both suites with and without optional backends on Python
+3.9, 3.12 and 3.14, then builds a wheel and tests its entrypoints outside the
+checkout. These offline checks do not replace testing on Raspberry Pi hardware.
+
+Verify release file integrity from the checkout root with `sha256sum -c SHA256SUMS`.
+The manifest uses LF bytes; `.gitattributes` preserves them on new Windows checkouts.
 
 ## Important limitations
 
@@ -412,7 +442,7 @@ python3 test_GGFWPi_v0.7.0.py
 
 ```text
 .
-├── GGFWPi_v0.7.0-beta.py       # compatibility launcher
+├── GGFWPi_v0.7.1-beta.py       # compatibility launcher
 ├── pyproject.toml
 ├── ggfw/
 │   ├── models/                 # findings, evidence, reports
@@ -425,7 +455,7 @@ python3 test_GGFWPi_v0.7.0.py
 │   ├── reporting/              # console and policy gates
 │   └── packaging/              # .ggcap evidence package
 ├── test_GGFWPi_latest.py
-├── test_GGFWPi_v0.7.0.py
+├── test_GGFWPi_v0.7.1.py
 ├── README.md
 ├── LICENSE
 ├── NOTICE
