@@ -1,4 +1,5 @@
 """Extracted GGFW component: audit."""
+from uuid import uuid4
 from ggfw._compat import (
     Any, Dict, List, Optional, Path, asdict, datetime, json, os, timezone,
 )
@@ -143,7 +144,7 @@ def run_audit():
     print(f'[*] Detected platform: {platform}')
 
     now_utc = datetime.now(timezone.utc)
-    scan_id = f"ggfw-{now_utc.strftime('%Y%m%dT%H%M%SZ')}-{soc.lower()}"
+    scan_id = f"ggfw-{now_utc.strftime('%Y%m%dT%H%M%SZ')}-{soc.lower()}-{uuid4().hex}"
     evidence_builder = EvidencePackageBuilder(args.evidence_root, scan_id)
 
     legacy_json_output: Optional[Path] = None

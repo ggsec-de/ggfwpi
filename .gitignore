@@ -34,4 +34,4 @@ htmlcov/
 build/
 dist/
 *.egg-info/
-.venv/
+.venv*/

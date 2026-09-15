@@ -4,6 +4,7 @@ from ggfw._compat import (
 )
 from ggfw.constants import EVIDENCE_SCHEMA, TOOL_VERSION, TOOL_VERSION_DISPLAY
 from ggfw.files import sha256_file
+from ggfw.errors import GGFWRuntimeError
 from ggfw.models.report import GGFWReport
 from ggfw.models.spi import SPIReadResult
 
@@ -14,7 +15,13 @@ class EvidencePackageBuilder:
         self.root = Path(evidence_root).expanduser().resolve()
         self.scan_id = scan_id
         self.scan_dir = self.root / scan_id
-        self.scan_dir.mkdir(parents=True, exist_ok=True)
+        if not scan_id or scan_id in {'.', '..'} or any(c in scan_id for c in '/\\:'):
+            raise GGFWRuntimeError('scan_id must be a single directory name')
+        try:
+            # Exclusive creation is the boundary for direct and concurrent callers.
+            self.scan_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+        except OSError as exc:
+            raise GGFWRuntimeError(f'Cannot allocate fresh evidence directory: {self.scan_dir}') from exc
         try:
             os.chmod(self.scan_dir, 0o700)
         except OSError:
