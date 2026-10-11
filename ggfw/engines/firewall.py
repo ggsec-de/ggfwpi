@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 """Best-effort firewall configuration evidence, not a packet-reachability proof."""
 import json
 import os

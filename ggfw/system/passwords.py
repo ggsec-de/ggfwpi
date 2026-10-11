@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 """Extracted GGFW component: system.passwords."""
 from ggfw._compat import (
     Any, CRYPT_AVAILABLE, Dict, LIBCRYPT_AVAILABLE, List, Optional, PASSLIB_AVAILABLE, Path,

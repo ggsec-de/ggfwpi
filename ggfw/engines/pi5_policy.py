@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 """Extracted GGFW component: engines.pi5_policy."""
 from ggfw._compat import Dict
 from ggfw.models.findings import Finding

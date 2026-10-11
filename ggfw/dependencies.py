@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 """Extracted GGFW component: dependencies."""
 from ggfw._compat import (
     CRYPT_AVAILABLE, Dict, LIBCRYPT_AVAILABLE, List, Optional, PASSLIB_AVAILABLE, Tuple, os,

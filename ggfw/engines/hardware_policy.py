@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 """Extracted GGFW component: engines.hardware_policy."""
 from ggfw._compat import (
     Any, Dict, List, Optional, Path, Tuple, json,

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 # Copyright 2026 GG Advanced IT Security UG
 # SPDX-License-Identifier: Apache-2.0
 """Compatibility launcher for GGFW 0.7.1 beta."""

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 """Extracted GGFW component: reporting.console."""
 from ggfw._compat import (
     Any, List, Optional, Tuple, json, re,

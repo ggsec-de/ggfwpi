@@ -487,5 +487,5 @@ GGFWPi is licensed under the **Apache License, Version 2.0**. Everyone may use, 
 
 Redistributions and derivative works must retain the applicable copyright, license, and attribution notices. Keep the [`LICENSE`](LICENSE) file and the attribution contained in [`NOTICE`](NOTICE) with redistributed copies, as required by Apache-2.0.
 
-Copyright © 2026 GG Advanced IT Security UG.  
+Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 Developed by Maciej Gojny for GGSEC.

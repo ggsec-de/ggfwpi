@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Maciej Gojny, GG Advanced IT Security UG
 # Copyright 2026 GG Advanced IT Security UG
 # Developed by Maciej Gojny for GGSEC
 # SPDX-License-Identifier: Apache-2.0
